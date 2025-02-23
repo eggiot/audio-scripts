@@ -1,0 +1,183 @@
+#!/bin/env python3
+
+import os
+import time
+import shutil
+import subprocess
+import glob
+import json
+import readline
+import atexit
+
+# ------------------ Shell History Persistence ------------------
+histfile = os.path.expanduser("~/.cdpsh_history")
+if not os.path.exists(histfile):
+    open(histfile, 'a').close()  # Create the file if it doesn't exist
+try:
+    readline.read_history_file(histfile)
+except FileNotFoundError:
+    pass
+atexit.register(readline.write_history_file, histfile)
+# ------------------ End Shell History ------------------
+
+# ------------------ Configuration and Globals ------------------
+working_file = "working.wav"
+backup_dir = "backups"
+stack_file = os.path.join(backup_dir, "stack.json")
+undo_stack = []  # Global undo stack (list of backup filenames)
+redo_stack = []  # Global redo stack (list of backup filenames)
+
+# Ensure backup directory exists
+if not os.path.exists(backup_dir):
+    os.makedirs(backup_dir)
+
+# ------------------ State Persistence Functions ------------------
+def save_stacks():
+    """Persist the undo/redo stacks to disk."""
+    stacks = {"undo": undo_stack, "redo": redo_stack}
+    with open(stack_file, "w") as f:
+        json.dump(stacks, f)
+
+def load_stacks():
+    """Load the undo/redo stacks from disk, if available."""
+    global undo_stack, redo_stack
+    if os.path.exists(stack_file):
+        with open(stack_file, "r") as f:
+            stacks = json.load(f)
+            undo_stack = stacks.get("undo", [])
+            redo_stack = stacks.get("redo", [])
+
+# Load stacks on startup
+load_stacks()
+
+# Save stacks on exit
+atexit.register(save_stacks)
+# ------------------ End State Persistence ------------------
+
+def backup_current():
+    """Copy the current working.wav to backup and add it to the undo stack."""
+    if os.path.exists(working_file):
+        timestamp = int(time.time())
+        backup_name = os.path.join(backup_dir, f"backup_{timestamp}.wav")
+        shutil.copy2(working_file, backup_name)
+        undo_stack.append(backup_name)
+        print(f"Backed up {working_file} to {backup_name}")
+        save_stacks()  # Persist the new state
+
+def perform_undo():
+    """Restore working.wav from the last backup, saving the current state for redo."""
+    if not undo_stack:
+        print("No undo available.")
+        return
+    if os.path.exists(working_file):
+        timestamp = int(time.time())
+        redo_name = os.path.join(backup_dir, f"redo_{timestamp}.wav")
+        shutil.copy2(working_file, redo_name)
+        redo_stack.append(redo_name)
+        print(f"Saved current {working_file} to {redo_name} for redo")
+    last_backup = undo_stack.pop()
+    shutil.copy2(last_backup, working_file)
+    print(f"Restored {working_file} from backup {last_backup}")
+    save_stacks()  # Persist changes to the stacks
+
+def perform_redo():
+    """Restore working.wav from the last redo backup, saving the current state for undo."""
+    if not redo_stack:
+        print("No redo available.")
+        return
+    if os.path.exists(working_file):
+        timestamp = int(time.time())
+        backup_name = os.path.join(backup_dir, f"backup_{timestamp}.wav")
+        shutil.copy2(working_file, backup_name)
+        undo_stack.append(backup_name)
+        print(f"Backed up current {working_file} to {backup_name} for undo")
+    last_redo = redo_stack.pop()
+    shutil.copy2(last_redo, working_file)
+    print(f"Restored {working_file} from redo {last_redo}")
+    save_stacks()  # Persist changes to the stacks
+
+def run_shell_command(cmd, do_backup=True):
+    """
+    Runs a shell command (which must refer to working.wav as input) and monitors for a new WAV file.
+    If a new WAV file is detected, optionally backs up working.wav, clears the redo stack,
+    renames the new file to a unique name, and copies it to working.wav.
+    """
+    pre_files = set(glob.glob("*.wav"))
+    pre_files.discard(working_file)
+    subprocess.run(cmd, shell=True)
+    timeout = 5.0
+    poll_interval = 0.5
+    new_file = None
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        post_files = set(glob.glob("*.wav"))
+        post_files.discard(working_file)
+        new_files = post_files - pre_files
+        if new_files:
+            new_file = max(new_files, key=lambda f: os.path.getmtime(f))
+            break
+        time.sleep(poll_interval)
+    if new_file:
+        print(f"Detected new WAV file: {new_file}")
+        if do_backup:
+            backup_current()
+        redo_stack.clear()  # Clear redo stack on a new change
+        save_stacks()  # Persist changes to the stacks
+        timestamp = int(time.time())
+        unique_state = os.path.join(backup_dir, f"state_{timestamp}.wav")
+        shutil.move(new_file, unique_state)
+        print(f"Renamed new file to {unique_state}")
+        shutil.copy2(unique_state, working_file)
+        print(f"Updated {working_file} with the new file.")
+    else:
+        print("No new WAV file detected after command.")
+
+def perform_save(cmd):
+    """Copies working.wav to a user-specified filename.
+    Usage: :save <filename>
+    """
+    parts = cmd.split(maxsplit=1)
+    if len(parts) < 2:
+        print("Usage: :save <filename>")
+        return
+    target = parts[1].strip()
+    if not target.endswith(".wav"):
+        print("Filename should end with .wav")
+        return
+    if not os.path.exists(working_file):
+        print(f"No {working_file} found to save.")
+        return
+    try:
+        shutil.copy2(working_file, target)
+        print(f"Saved {working_file} as {target}")
+    except Exception as e:
+        print(f"Error saving file: {e}")
+
+def main():
+    print("Enter shell commands verbatim (they must use working.wav as input).")
+    print("Internal commands: :undo, :redo, :save, :q (quit).")
+    prompt = ">>> "
+    last_command = ""
+    while True:
+        cmd = input(prompt).strip()
+        if cmd.startswith(":"):
+            if cmd in (":q", ":quit"):
+                print("Quitting.")
+                break
+            elif cmd.startswith(":undo"):
+                perform_undo()
+            elif cmd.startswith(":redo"):
+                perform_redo()
+            elif cmd.startswith(":save"):
+                perform_save(cmd)
+            else:
+                # For any unrecognised internal command, print its first token.
+                command_token = cmd.split()[0] if cmd.split() else ""
+                print("not an internal command: " + command_token)
+        else:
+            last_command = cmd  # store the last shell command for potential repeat functionality
+            run_shell_command(cmd)
+            
+if __name__ == "__main__":
+    main()
+

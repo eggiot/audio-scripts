@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+
+import sys
+import subprocess
+
+def play_audio_segment(audio_file, start, end):
+    duration = end - start
+    subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-ss", str(start), "-t", str(duration), audio_file])
+
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: timesfile <audio_file> <output_times_file>")
+        sys.exit(1)
+
+    audio_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    print("Enter start and end times (space-separated). 'q' to quit.")
+
+    while True:
+        entry = input("Time: ").strip()
+        if entry.lower() == "q":
+            break
+
+        try:
+            start, end = map(float, entry.split())
+            if start >= end:
+                print("Err: start >= end")
+                continue
+        except ValueError:
+            print("Err: invalid input")
+            continue
+
+        play_audio_segment(audio_file, start, end)
+
+        while True:
+            confirm = input("Keep? (y/n/q): ").strip().lower()
+            if confirm in {"y", "n", "q"}:
+                break
+            print("Err: enter y, n, or q")
+
+        if confirm == "q":
+            break
+        if confirm == "y":
+            with open(output_file, "a") as f:
+                f.write(f"{start}\t{end}\n")
+
+    print(f"Saved: {output_file}")
+
+if __name__ == "__main__":
+    main()
+

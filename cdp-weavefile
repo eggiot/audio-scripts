@@ -1,0 +1,46 @@
+#!/bin/bash
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $(basename "$0") <output.txt> <step1> [<step2> …]" >&2
+    exit 1
+fi
+
+OUTPUT_FILE="$1"
+shift
+
+cumulative=0
+steps=()
+for step in "$@"; do
+    if ! [[ "$step" =~ ^-?[0-9]+$ ]]; then
+        echo "Error: '$step' is not a valid integer." >&2
+        exit 1
+    fi
+    if (( step > 127 )); then
+        echo "Error: Step $step exceeds the maximum allowed value of 127." >&2
+        exit 1
+    elif (( step < -128 )); then
+        echo "Error: Step $step is less than the minimum allowed value of -128." >&2
+        exit 1
+    fi
+    cumulative=$(( cumulative + step ))
+    if (( cumulative < 0 )); then
+        echo "Error: Cumulative movement becomes negative (invalid weave)." >&2
+        exit 1
+    fi
+    steps+=("$step")
+done
+
+if (( cumulative <= 0 )); then
+    echo "Error: Final window must be after the start (final cumulative sum > 0)." >&2
+    exit 1
+fi
+
+{
+    echo "# BLUR WEAVE Weavefile"
+    echo "# Generated on $(date)"
+    echo "[Window movement]"
+    echo "${steps[*]}"
+} > "$OUTPUT_FILE"
+
+echo "Weavefile generated successfully: $OUTPUT_FILE"
+

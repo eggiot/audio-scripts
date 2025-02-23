@@ -1,0 +1,28 @@
+#!/bin/bash
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $(basename "$0") <output.brk> <time1,value1> [<time2,value2> …]"
+    exit 1
+fi
+
+OUTPUT_FILE="$1"
+shift
+
+if [ -e "$OUTPUT_FILE" ]; then
+    echo "Warning: '$OUTPUT_FILE' exists and will be overwritten."
+fi
+
+{
+    echo "# CDP Breakpoint File"
+    echo "# Generated on $(date)"
+    for pair in "$@"; do
+        IFS=',' read -r time value <<< "$pair"
+        if [ -z "$time" ] || [ -z "$value" ]; then
+            echo "Error: Invalid pair '$pair'. Expected format: time,value" >&2
+            exit 1
+        fi
+        echo "$time $value"
+    done
+} > "$OUTPUT_FILE"
+
+echo "Breakpoint file created: $OUTPUT_FILE"

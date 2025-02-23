@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# pvocwrap: Wrapper script for CDP commands requiring PVOC analysis/synthesis
+# Automates PVOC steps for CDP spectral processing commands:
+# - Performs PVOC analysis on input WAV
+# - Runs specified CDP command
+# - Synthesizes result back to WAV
+# - Handles temporary file management
+# Usage: pvocwrap <cdp_command> [args...] <input.wav> <output.wav> [additional args...]
+
+# Function to generate a temporary filename
+temp_filename() {
+    echo "$(mktemp -u).ana"
+}
+
+# Check if at least one argument is provided
+if [ "$#" -lt 1 ]; then
+    echo "Usage: pvocwrap <cdp_command> [args...] <input.wav> <output.wav> [additional args...]"
+    exit 1
+fi
+
+# Find input and output WAV files
+input_index=-1
+output_index=-1
+index=0
+for arg in "$@"; do
+    index=$((index + 1))
+    if [[ "$arg" == *.wav ]]; then
+        if [ $input_index -eq -1 ]; then
+            input_index=$index
+        else
+            output_index=$index
+            break
+        fi
+    fi
+done
+
+if [ $input_index -eq -1 ] || [ $output_index -eq -1 ]; then
+    echo "Error: Could not find input and output WAV files"
+    exit 1
+fi
+
+INPUT_WAV="${!input_index}"
+OUTPUT_WAV="${!output_index}"
+
+# Generate temporary filenames
+TEMP_INPUT_ANA=$(temp_filename)
+TEMP_OUTPUT_ANA=$(temp_filename)
+
+# Perform PVOC analysis
+pvoc anal 1 "$INPUT_WAV" "$TEMP_INPUT_ANA"
+
+# Construct the CDP command
+CDP_COMMAND=()
+index=0
+for arg in "$@"; do
+    index=$((index + 1))
+    if [ $index -eq $input_index ]; then
+        CDP_COMMAND+=("$TEMP_INPUT_ANA")
+    elif [ $index -eq $output_index ]; then
+        CDP_COMMAND+=("$TEMP_OUTPUT_ANA")
+    else
+        CDP_COMMAND+=("$arg")
+    fi
+done
+
+# Run the CDP command
+"${CDP_COMMAND[@]}"
+
+# Perform PVOC synthesis
+pvoc synth "$TEMP_OUTPUT_ANA" "$OUTPUT_WAV"
+
+# Clean up temporary files
+rm "$TEMP_INPUT_ANA" "$TEMP_OUTPUT_ANA"
+
