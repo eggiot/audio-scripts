@@ -61,7 +61,6 @@ def backup_current():
         backup_name = os.path.join(backup_dir, f"backup_{timestamp}.wav")
         shutil.copy2(working_file, backup_name)
         undo_stack.append(backup_name)
-        print(f"Backed up {working_file} to {backup_name}")
         save_stacks()  # Persist the new state
 
 def perform_undo():
@@ -74,10 +73,8 @@ def perform_undo():
         redo_name = os.path.join(backup_dir, f"redo_{timestamp}.wav")
         shutil.copy2(working_file, redo_name)
         redo_stack.append(redo_name)
-        print(f"Saved current {working_file} to {redo_name} for redo")
     last_backup = undo_stack.pop()
     shutil.copy2(last_backup, working_file)
-    print(f"Restored {working_file} from backup {last_backup}")
     save_stacks()  # Persist changes to the stacks
 
 def perform_redo():
@@ -90,10 +87,8 @@ def perform_redo():
         backup_name = os.path.join(backup_dir, f"backup_{timestamp}.wav")
         shutil.copy2(working_file, backup_name)
         undo_stack.append(backup_name)
-        print(f"Backed up current {working_file} to {backup_name} for undo")
     last_redo = redo_stack.pop()
     shutil.copy2(last_redo, working_file)
-    print(f"Restored {working_file} from redo {last_redo}")
     save_stacks()  # Persist changes to the stacks
 
 def run_shell_command(cmd, do_backup=True):
@@ -126,9 +121,7 @@ def run_shell_command(cmd, do_backup=True):
         timestamp = int(time.time())
         unique_state = os.path.join(backup_dir, f"state_{timestamp}.wav")
         shutil.move(new_file, unique_state)
-        print(f"Renamed new file to {unique_state}")
         shutil.copy2(unique_state, working_file)
-        print(f"Updated {working_file} with the new file.")
     else:
         print("No new WAV file detected after command.")
 
