@@ -122,7 +122,7 @@ def run_shell_command(cmd, do_backup=True):
         if do_backup:
             backup_current()
         redo_stack.clear()  # Clear redo stack on a new change
-        save_stacks()  # Persist changes to the stacks
+        save_stacks()       # Persist changes to the stacks
         timestamp = int(time.time())
         unique_state = os.path.join(backup_dir, f"state_{timestamp}.wav")
         shutil.move(new_file, unique_state)
@@ -153,31 +153,46 @@ def perform_save(cmd):
     except Exception as e:
         print(f"Error saving file: {e}")
 
+def perform_play():
+    """
+    Plays the current working.wav using the 'play' command (SoX).
+    If 'play' is not found, prints an error.
+    """
+    if not os.path.exists(working_file):
+        print(f"No {working_file} to play.")
+        return
+    try:
+        subprocess.run(["play", working_file])
+    except FileNotFoundError:
+        print("Error: 'play' command not found. Install SoX or use another audio player.")
+    except Exception as e:
+        print(f"An error occurred while playing {working_file}: {e}")
+
 def main():
     print("Enter shell commands verbatim (they must use working.wav as input).")
-    print("Internal commands: :undo, :redo, :save, :q (quit).")
+    print("Internal commands: :u(ndo), :r(edo), :s(ave), :p(lay), :q(uit).")
     prompt = ">>> "
     last_command = ""
     while True:
         cmd = input(prompt).strip()
         if cmd.startswith(":"):
-            if cmd in (":q", ":quit"):
-                print("Quitting.")
+            if cmd.startswith(":q"):
                 break
-            elif cmd.startswith(":undo"):
+            elif cmd.startswith(":u"):
                 perform_undo()
-            elif cmd.startswith(":redo"):
+            elif cmd.startswith(":r"):
                 perform_redo()
-            elif cmd.startswith(":save"):
+            elif cmd.startswith(":s"):
                 perform_save(cmd)
+            elif cmd.startswith(":p"):
+                perform_play()
             else:
-                # For any unrecognised internal command, print its first token.
                 command_token = cmd.split()[0] if cmd.split() else ""
                 print("not an internal command: " + command_token)
         else:
-            last_command = cmd  # store the last shell command for potential repeat functionality
+            last_command = cmd
             run_shell_command(cmd)
-            
+
 if __name__ == "__main__":
     main()
 
