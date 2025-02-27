@@ -10,7 +10,7 @@ import numpy as np
 from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 
-# Colour definitions (RGB tuples) adjusted to mimic your screenshot:
+# Colour definitions (RGB tuples)
 BG_COLOR      = (0, 0, 0)         # black
 TRACE_COLOR   = (255, 0, 255)       # red
 BORDER_COLOR  = (0, 255, 255)       # neon green
