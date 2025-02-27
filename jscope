@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+import sys
+import time
+import threading
+import argparse
+from collections import deque
+
+import jack
+import numpy as np
+from PyQt5 import QtWidgets, QtCore
+import pyqtgraph as pg
+
+# Colour definitions (RGB tuples) adjusted to mimic your screenshot:
+BG_COLOR      = (0, 0, 0)         # black
+TRACE_COLOR   = (255, 0, 255)       # red
+BORDER_COLOR  = (0, 255, 255)       # neon green
+CLIP_COLOR    = (255, 0, 0)       # red (same as trace)
+TEXT_COLOR    = (0, 255, 255)       # neon green
+
+# Default signal range and buffer size
+MIN_RANGE   = -1.0
+MAX_RANGE   =  1.0
+BUFFER_SIZE = 8192
+
+class OscilloscopeWindow(QtWidgets.QMainWindow):
+    def __init__(self, title, jack_client_name, min_val, max_val):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.resize(800, 600)
+
+        # Each instance has its own ring buffer and lock.
+        self.ring_buffer = deque(maxlen=BUFFER_SIZE)
+        self.buffer_lock = threading.Lock()
+
+        # Store the min and max for the Y-range.
+        self.min_val = min_val
+        self.max_val = max_val
+
+        # Create a unique JACK client for this instance.
+        try:
+            self.client = jack.Client(jack_client_name)
+        except jack.JackError as e:
+            print(f"Could not create JACK client '{jack_client_name}':", e)
+            sys.exit(1)
+
+        # Register an input port.
+        self.inport = self.client.inports.register("input")
+
+        # Set process callback to receive audio data.
+        self.client.set_process_callback(self.process)
+        try:
+            self.client.activate()
+        except jack.JackError as e:
+            print(f"Could not activate JACK client '{jack_client_name}':", e)
+            sys.exit(1)
+
+        # Build the GUI.
+        self.plotWidget = pg.PlotWidget(background=BG_COLOR)
+        self.setCentralWidget(self.plotWidget)
+
+        # Disable the grid for a simpler aesthetic.
+        self.plotWidget.showGrid(x=False, y=False)
+
+        # Set the Y-range based on user-supplied min/max.
+        self.plotWidget.setYRange(self.min_val, self.max_val)
+
+        # Set up the border colour.
+        self.plotWidget.getViewBox().setBorder(pg.mkPen(BORDER_COLOR, width=2))
+
+        # Create the waveform trace.
+        self.curve = self.plotWidget.plot(pen=pg.mkPen(TRACE_COLOR, width=2))
+
+        # Clipping indicator lines.
+        self.high_clip_line = pg.InfiniteLine(angle=0, pen=pg.mkPen(CLIP_COLOR, width=1))
+        self.low_clip_line  = pg.InfiniteLine(angle=0, pen=pg.mkPen(CLIP_COLOR, width=1))
+        self.high_clip_line.hide()
+        self.low_clip_line.hide()
+        self.plotWidget.addItem(self.high_clip_line)
+        self.plotWidget.addItem(self.low_clip_line)
+
+        # Text displaying JACK port names.
+        self.text_item = pg.TextItem(color=TEXT_COLOR, anchor=(0, 0))
+        self.text_item.setText(f"In: {self.inport.name}  |  Client: {self.client.name}")
+        self.plotWidget.addItem(self.text_item)
+
+        # Place it slightly above the max so it appears at the top.
+        self.text_item.setPos(0, self.max_val)
+
+        # Timer to refresh the display (~60 fps).
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_plot)
+        self.timer.start(16)
+
+    def process(self, frames):
+        """JACK process callback: acquire samples from the input port."""
+        data = self.inport.get_array()  # numpy array of floats.
+        with self.buffer_lock:
+            self.ring_buffer.extend(data.tolist())
+        return jack.CallbackReturnValue(0)
+
+    def update_plot(self):
+        with self.buffer_lock:
+            data = list(self.ring_buffer)
+        # Ensure we have at least 1024 points; pad with zeros if necessary.
+        if len(data) < 1024:
+            data = [0.0] * (1024 - len(data)) + data[-len(data):]
+        else:
+            data = data[-1024:]
+        np_data = np.array(data)
+
+        # Update the waveform display.
+        self.curve.setData(np_data)
+
+        # Check clipping conditions.
+        if np_data.max() >= self.max_val:
+            self.high_clip_line.setPos(self.max_val)
+            self.high_clip_line.show()
+        else:
+            self.high_clip_line.hide()
+
+        if np_data.min() <= self.min_val:
+            self.low_clip_line.setPos(self.min_val)
+            self.low_clip_line.show()
+        else:
+            self.low_clip_line.hide()
+
+def main(min_val, max_val):
+    app = QtWidgets.QApplication(sys.argv)
+    # Generate a short unique JACK client name using the last six digits of the Unix timestamp.
+    unique_client_name = "jscope_" + str(int(time.time()) % 1000000)
+    window = OscilloscopeWindow("oscilloscope", unique_client_name, min_val, max_val)
+    window.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="JACK Oscilloscope.")
+    parser.add_argument("--min", type=float, default=-1.0, help="Minimum display range")
+    parser.add_argument("--max", type=float, default=1.0, help="Maximum display range")
+    args = parser.parse_args()
+
+    MIN_RANGE = args.min
+    MAX_RANGE = args.max
+    main(MIN_RANGE, MAX_RANGE)
+
