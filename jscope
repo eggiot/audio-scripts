@@ -12,15 +12,17 @@ import pyqtgraph as pg
 
 # Colour definitions (RGB tuples)
 BG_COLOR      = (0, 0, 0)         # black
-TRACE_COLOR   = (255, 0, 255)       # red
-BORDER_COLOR  = (0, 255, 255)       # neon green
-CLIP_COLOR    = (255, 0, 0)       # red (same as trace)
-TEXT_COLOR    = (0, 255, 255)       # neon green
+TRACE_COLOR   = (255, 0, 255)     # magenta
+BORDER_COLOR  = (0, 255, 255)     # neon green
+CLIP_COLOR    = (255, 0, 0)       # red
+TEXT_COLOR    = (0, 255, 255)     # neon green
 
 # Default signal range and buffer size
-MIN_RANGE   = -1.0
-MAX_RANGE   =  1.0
-BUFFER_SIZE = 8192
+MIN_RANGE     = -1.0
+MAX_RANGE     =  1.0
+BUFFER_SIZE   = 33075
+DISPLAY_POINTS= 16384
+CLIP_GUARD    = 1e-3  # tiny margin so ±1.0 doesn't register as a "clip" unless really over
 
 class OscilloscopeWindow(QtWidgets.QMainWindow):
     def __init__(self, title, jack_client_name, min_val, max_val):
@@ -57,17 +59,11 @@ class OscilloscopeWindow(QtWidgets.QMainWindow):
         # Build the GUI.
         self.plotWidget = pg.PlotWidget(background=BG_COLOR)
         self.setCentralWidget(self.plotWidget)
-
-        # Disable the grid for a simpler aesthetic.
         self.plotWidget.showGrid(x=False, y=False)
-
-        # Set the Y-range based on user-supplied min/max.
         self.plotWidget.setYRange(self.min_val, self.max_val)
-
-        # Set up the border colour.
         self.plotWidget.getViewBox().setBorder(pg.mkPen(BORDER_COLOR, width=2))
 
-        # Create the waveform trace.
+        # Create the waveform trace (simple line plot).
         self.curve = self.plotWidget.plot(pen=pg.mkPen(TRACE_COLOR, width=2))
 
         # Clipping indicator lines.
@@ -82,8 +78,6 @@ class OscilloscopeWindow(QtWidgets.QMainWindow):
         self.text_item = pg.TextItem(color=TEXT_COLOR, anchor=(0, 0))
         self.text_item.setText(f"In: {self.inport.name}  |  Client: {self.client.name}")
         self.plotWidget.addItem(self.text_item)
-
-        # Place it slightly above the max so it appears at the top.
         self.text_item.setPos(0, self.max_val)
 
         # Timer to refresh the display (~60 fps).
@@ -93,36 +87,46 @@ class OscilloscopeWindow(QtWidgets.QMainWindow):
 
     def process(self, frames):
         """JACK process callback: acquire samples from the input port."""
-        data = self.inport.get_array()  # numpy array of floats.
+        data = self.inport.get_array()  # numpy array of floats
         with self.buffer_lock:
             self.ring_buffer.extend(data.tolist())
         return jack.CallbackReturnValue(0)
 
     def update_plot(self):
+        # Safely extract current buffer contents as a NumPy array.
         with self.buffer_lock:
             data = list(self.ring_buffer)
-        # Ensure we have at least 1024 points; pad with zeros if necessary.
-        if len(data) < 1024:
-            data = [0.0] * (1024 - len(data)) + data[-len(data):]
+        if not data:
+            return
+
+        np_data = np.array(data, dtype=np.float32)
+
+        # Downsample for plotting if needed:
+        if len(np_data) <= DISPLAY_POINTS:
+            downsampled_data = np_data
         else:
-            data = data[-1024:]
-        np_data = np.array(data)
+            factor = len(np_data) // DISPLAY_POINTS
+            downsampled_data = np_data[::factor]
 
-        # Update the waveform display.
-        self.curve.setData(np_data)
+        x = np.arange(len(downsampled_data))
+        self.curve.setData(x, downsampled_data)
 
-        # Check clipping conditions.
-        if np_data.max() >= self.max_val:
+        # Simple clipping check with a small guard so ±1 isn't always flagged.
+        real_max = downsampled_data.max()
+        real_min = downsampled_data.min()
+
+        if real_max >= (self.max_val - CLIP_GUARD):
             self.high_clip_line.setPos(self.max_val)
             self.high_clip_line.show()
         else:
             self.high_clip_line.hide()
 
-        if np_data.min() <= self.min_val:
+        if real_min <= (self.min_val + CLIP_GUARD):
             self.low_clip_line.setPos(self.min_val)
             self.low_clip_line.show()
         else:
             self.low_clip_line.hide()
+
 
 def main(min_val, max_val):
     app = QtWidgets.QApplication(sys.argv)
@@ -131,6 +135,7 @@ def main(min_val, max_val):
     window = OscilloscopeWindow("oscilloscope", unique_client_name, min_val, max_val)
     window.show()
     sys.exit(app.exec_())
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="JACK Oscilloscope.")
