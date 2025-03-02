@@ -1,0 +1,95 @@
+#!/bin/env python3
+
+import wave
+import numpy as np
+import argparse
+from scipy.fftpack import fft
+
+def load_waveform(file_path):
+    """Load a single-cycle waveform from a WAV file."""
+    with wave.open(file_path, 'rb') as wf:
+        num_channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        num_frames = wf.getnframes()
+        raw_data = wf.readframes(num_frames)
+    
+    dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
+    dtype = dtype_map.get(sample_width, np.int16)
+
+    waveform = np.frombuffer(raw_data, dtype=dtype)
+    
+    if num_channels > 1:
+        waveform = waveform.reshape(-1, num_channels).mean(axis=1)  # Convert to mono
+    
+    waveform = waveform.astype(np.float32) / np.iinfo(dtype).max  # Normalise to -1 to 1
+    return waveform
+
+def analyse_waveform(waveform, args):
+    """Analyse the waveform based on provided flags."""
+    results = {}
+
+    # Discontinuity metrics
+    if args.d or args.a:
+        diffs = np.diff(waveform)
+        results["Average Discontinuity"] = np.mean(np.abs(diffs))
+        results["Loop Discontinuity"] = abs(waveform[-1] - waveform[0])
+        results["Std Dev of Discontinuities"] = np.std(diffs)
+        results["Max Discontinuity"] = np.max(np.abs(diffs))
+        results["Min Discontinuity"] = np.min(np.abs(diffs))
+
+    # Amplitude statistics
+    if args.m or args.a:
+        results["Peak Amplitude"] = np.max(np.abs(waveform))
+        results["Peak-to-Peak Amplitude"] = np.max(waveform) - np.min(waveform)
+        results["RMS Amplitude"] = np.sqrt(np.mean(waveform ** 2))
+        results["Mean Amplitude"] = np.mean(waveform)
+
+    # Zero-crossing rate
+    if args.z or args.a:
+        zero_crossings = np.where(np.diff(np.sign(waveform)))[0]
+        results["Zero-Crossing Rate"] = len(zero_crossings) / len(waveform)
+
+    # Symmetry and crest factor
+    if args.s or args.a:
+        results["Waveform Symmetry"] = np.mean(waveform[waveform > 0]) - np.mean(waveform[waveform < 0])
+        results["Crest Factor"] = np.max(np.abs(waveform)) / np.sqrt(np.mean(waveform ** 2))
+
+    # Frequency domain analysis
+    if args.f or args.a:
+        spectrum = np.abs(fft(waveform))
+        results["Spectral Flatness"] = np.exp(np.mean(np.log(spectrum + 1e-10))) / np.mean(spectrum)
+
+    # Skewness and Kurtosis
+    if args.k or args.a:
+        results["Skewness"] = np.mean(((waveform - np.mean(waveform)) / np.std(waveform)) ** 3)
+        results["Kurtosis"] = np.mean(((waveform - np.mean(waveform)) / np.std(waveform)) ** 4)
+
+    # Duty cycle (for pulse-like waves)
+    if args.y or args.a:
+        duty_cycle = np.sum(waveform > 0) / len(waveform)
+        results["Effective Duty Cycle"] = duty_cycle
+
+    return results
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyse single-cycle waveforms from WAV files.")
+    parser.add_argument("filename", type=str, help="Path to the WAV file.")
+    
+    # Single-letter flags
+    parser.add_argument("-d", action="store_true", help="Compute discontinuity statistics.")
+    parser.add_argument("-m", action="store_true", help="Compute amplitude statistics.")
+    parser.add_argument("-z", action="store_true", help="Compute zero-crossing rate.")
+    parser.add_argument("-s", action="store_true", help="Compute waveform symmetry and crest factor.")
+    parser.add_argument("-f", action="store_true", help="Compute spectral flatness (FFT-based).")
+    parser.add_argument("-k", action="store_true", help="Compute skewness and kurtosis.")
+    parser.add_argument("-y", action="store_true", help="Compute effective duty cycle.")
+    parser.add_argument("-a", action="store_true", help="Compute all available statistics.")
+
+    args = parser.parse_args()
+
+    waveform = load_waveform(args.filename)
+    stats = analyse_waveform(waveform, args)
+
+    for key, value in stats.items():
+        print(f"{key}: {value:.6f}")
+
