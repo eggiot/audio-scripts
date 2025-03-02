@@ -1,32 +1,26 @@
-#!/bin/env python3
-import wave
-import numpy as np
-import pyaudio
+#!/usr/bin/env python3
+
 import argparse
+import numpy as np
+import soundfile as sf
+import pyaudio
 
 def load_waveform(file_path):
-    with wave.open(file_path, 'rb') as wf:
-        num_channels = wf.getnchannels()
-        sample_width = wf.getsampwidth()
-        sample_rate = wf.getframerate()
-        num_frames = wf.getnframes()
-        raw_data = wf.readframes(num_frames)
-    
-    dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
-    dtype = dtype_map.get(sample_width, np.int16)
-
-    waveform = np.frombuffer(raw_data, dtype=dtype)
-    
-    if num_channels > 1:
-        waveform = waveform.reshape(-1, num_channels).mean(axis=1)  # Convert to mono
-    
-    waveform = waveform.astype(np.float32) / np.iinfo(dtype).max  # Normalise to -1 to 1
-    return waveform, sample_rate
+    """Load a single-cycle waveform from a WAV file."""
+    try:
+        data, sample_rate = sf.read(file_path, dtype='float32')
+        if data.ndim > 1:
+            data = data[:, 0]  # Use the first channel if multiple are present
+        return data, sample_rate
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return None, None
 
 def play_waveform(waveform, sample_rate):
+    """Play the waveform in a seamless loop using pyaudio."""
     pa = pyaudio.PyAudio()
 
-    stream = pa.open(format=pyaudio.paFloat32,
+    stream = pa.open(format=pyaudio.paFloat32,  # Now supports 32-bit float
                      channels=1,
                      rate=sample_rate,
                      output=True)
@@ -35,7 +29,7 @@ def play_waveform(waveform, sample_rate):
         while True:
             stream.write(waveform.tobytes())  # Seamless looping
     except KeyboardInterrupt:
-        pass
+        print("\nPlayback stopped by user.")
     finally:
         stream.stop_stream()
         stream.close()
@@ -44,9 +38,11 @@ def play_waveform(waveform, sample_rate):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Play a single-cycle waveform seamlessly.")
     parser.add_argument("filename", type=str, help="Path to the WAV file.")
-    
     args = parser.parse_args()
-    
+
     waveform, sample_rate = load_waveform(args.filename)
-    play_waveform(waveform, sample_rate)
+    if waveform is not None:
+        play_waveform(waveform, sample_rate)
+    else:
+        print("Failed to load waveform.")
 
