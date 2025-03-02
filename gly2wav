@@ -1,0 +1,78 @@
+#!/bin/env python3
+
+import sys
+import struct
+import numpy as np
+import wave
+import argparse
+from scipy.signal import hilbert
+
+def extract_metadata(data, num_samples=14):
+    """Extract the last 14 samples as potential metadata (phase correction values)."""
+    metadata_data = data[-(num_samples * 2):]  # 14 samples * 2 bytes per sample
+    metadata = np.array(struct.unpack(f"{num_samples}h", metadata_data), dtype=np.int16)
+    return metadata
+
+def apply_phase_correction(waveform, phase_metadata):
+    """Applies phase correction based on metadata values."""
+    analytic_signal = hilbert(waveform)  # Compute the analytic signal
+    phase = np.angle(analytic_signal)  # Extract instantaneous phase
+
+    # Convert metadata to phase shift values in radians
+    phase_shift_degrees = (phase_metadata / 32768.0) * 360.0  # Normalized to degrees
+    phase_shift_radians = np.deg2rad(phase_shift_degrees.mean())  # Average shift in radians
+
+    # Apply phase correction
+    waveform_corrected = np.real(waveform * np.exp(-1j * phase_shift_radians))  # Phase shift
+
+    return waveform_corrected.astype(np.int16)
+
+def gly_to_wav(gly_filename, wav_filename, sample_rate=44100, resample=False):
+    """Converts a GLY file to a phase-corrected WAV format."""
+    try:
+        with open(gly_filename, "rb") as file:
+            data = file.read()
+
+        # Locate start of waveform data
+        header_size = 104  # Adjusted to skip known metadata
+        num_samples = 2034  # Expected sample count
+        raw_waveform_data = data[header_size:header_size + (num_samples * 2)]  # int16 is 2 bytes per sample
+
+        # Convert to int16 array
+        waveform = np.array(struct.unpack(f"{num_samples}h", raw_waveform_data), dtype=np.int16)
+
+        # Extract metadata (phase correction values)
+        phase_metadata = extract_metadata(data)
+
+        # Apply phase correction
+        waveform = apply_phase_correction(waveform, phase_metadata)
+
+        # Optional: Resample to 2048 samples for better synth compatibility
+        if resample:
+            waveform = np.interp(
+                np.linspace(0, num_samples - 1, 2048),  # New sample positions
+                np.arange(num_samples),  # Original positions
+                waveform  # Original data
+            ).astype(np.int16)
+
+        # Save as WAV file
+        with wave.open(wav_filename, "w") as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)  # 16-bit PCM
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(waveform.tobytes())
+
+        print(f"Successfully converted '{gly_filename}' to '{wav_filename}' with phase correction.")
+
+    except Exception as e:
+        print(f"Error processing '{gly_filename}': {e}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Convert a GLY file to a phase-corrected WAV format.")
+    parser.add_argument("input_gly", help="Path to input GLY file")
+    parser.add_argument("output_wav", help="Path to output WAV file")
+    parser.add_argument("--resample", action="store_true", help="Resample to 2048 samples for compatibility")
+
+    args = parser.parse_args()
+    gly_to_wav(args.input_gly, args.output_wav, resample=args.resample)
+
