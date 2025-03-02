@@ -1,75 +1,64 @@
 #!/usr/bin/env python3
 
-#!/usr/bin/env python3
-
 import sys
 import os
-import time
 import soundfile as sf
 import numpy as np
-import matplotlib.pyplot as plt
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
+from PyQt6.QtCore import QFileSystemWatcher, Qt
+import pyqtgraph as pg
 
-def load_waveform(filename):
-    """Load a waveform file and return time and amplitude arrays."""
-    try:
-        data, samplerate = sf.read(filename, always_2d=True)
-        n_channels = data.shape[1]
-        time_axis = np.linspace(0, len(data) / samplerate, num=len(data))
-        return time_axis, data[:, 0], samplerate  # Return first channel
-    except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return None, None, None
-
-def watch_file(filename):
-    """Watches a WAV file and updates the display when it changes."""
-    if not os.path.exists(filename):
-        print(f"Error: {filename} does not exist.")
-        sys.exit(1)
-
-    plt.ion()  # Interactive mode
-    fig, ax = plt.subplots()
-    fig.patch.set_facecolor("black")  # Set window background to black
-    ax.set_facecolor("black")  # Set plot background to black
-    ax.spines['bottom'].set_color("#00FFFF")  # Neon cyan axis lines
-    ax.spines['top'].set_color("#00FFFF")
-    ax.spines['right'].set_color("#00FFFF")
-    ax.spines['left'].set_color("#00FFFF")
-    ax.xaxis.label.set_color("#00FFFF")  # Cyan labels
-    ax.tick_params(axis='x', colors="#00FFFF")  # Cyan ticks
-    ax.yaxis.set_visible(False)  # Hide y-axis
-    ax.xaxis.set_ticks_position('none')  # Remove x-axis ticks
-    ax.xaxis.set_tick_params(size=0)  # Remove tick marks
-    ax.set_xticks([])  # Remove x-ticks entirely
-
-    # Remove the Matplotlib toolbar
-    fig.canvas.manager.toolbar.pack_forget()
-
-    last_mtime = 0
-
-    while True:
+class WavWatch(QWidget):
+    def __init__(self, filename):
+        super().__init__()
+        self.filename = filename
+        self.init_ui()
+        self.load_waveform()
+        self.file_watcher = QFileSystemWatcher([filename])
+        self.file_watcher.fileChanged.connect(self.load_waveform)
+    
+    def init_ui(self):
+        self.setWindowTitle("WavWatch - Live Waveform Viewer")
+        self.setGeometry(100, 100, 800, 400)
+        self.setStyleSheet("background-color: black;")
+        
+        layout = QVBoxLayout()
+        
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground("black")
+        self.plot_widget.showGrid(x=False, y=False)
+        self.plot_widget.getAxis("bottom").setPen(pg.mkPen("#00FFFF"))
+        self.plot_widget.getAxis("left").setPen(pg.mkPen("#00FFFF"))
+        self.plot_widget.getAxis("left").setStyle(tickLength=-5)
+        
+        self.waveform_plot = self.plot_widget.plot(pen=pg.mkPen("#FF00FF", width=1.5))
+        layout.addWidget(self.plot_widget)
+        
+        self.file_label = QLabel("", self)
+        self.file_label.setStyleSheet("color: #00FFFF; font-size: 14px;")
+        layout.addWidget(self.file_label)
+        
+        self.setLayout(layout)
+    
+    def load_waveform(self):
+        if not os.path.exists(self.filename):
+            self.file_label.setText("File not found.")
+            return
         try:
-            if os.path.exists(filename):
-                mtime = os.path.getmtime(filename)
-                if mtime != last_mtime:
-                    last_mtime = mtime
-                    time_axis, data, samplerate = load_waveform(filename)
-
-                    if data is not None:
-                        ax.clear()
-                        ax.set_facecolor("black")
-                        ax.plot(time_axis, data, color='#FF00FF', linewidth=1.5, alpha=0.8)  # Neon magenta waveform
-                        ax.set_title(f"Viewing: {filename}\nSampleRate: {samplerate} Hz", color="#00FFFF", fontsize=12, fontweight='bold')
-                        plt.draw()
-
-            plt.pause(1.0)  # Check for updates every second
-        except KeyboardInterrupt:
-            print("Exiting viewer.")
-            break
+            data, samplerate = sf.read(self.filename, always_2d=True)
+            time_axis = np.linspace(0, len(data) / samplerate, num=len(data))
+            self.waveform_plot.setData(time_axis, data[:, 0])
+            self.file_label.setText(f"Viewing: {os.path.basename(self.filename)} | Sample Rate: {samplerate} Hz")
+        except Exception as e:
+            self.file_label.setText(f"Error loading file: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: ./waveform_watcher.py <filename>")
+        print("Usage: ./wavwatch_qt.py <filename>")
         sys.exit(1)
-
-    watch_file(sys.argv[1])
+    
+    app = QApplication(sys.argv)
+    viewer = WavWatch(sys.argv[1])
+    viewer.show()
+    sys.exit(app.exec())
 
