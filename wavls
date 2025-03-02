@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import soundfile as sf
+import numpy as np
+import PyQt6.QtWidgets as QtWidgets
+import PyQt6.QtGui as QtGui
+import PyQt6.QtCore as QtCore
+import pyqtgraph as pg
+
+class Wavls(QtWidgets.QWidget):
+    def __init__(self, directory):
+        super().__init__()
+        self.directory = directory
+        self.files = sorted([f for f in os.listdir(directory) if f.lower().endswith(".wav")])
+        self.current_index = 0 if self.files else None
+        
+        if not self.files:
+            print("No WAV files found in the specified directory.")
+            sys.exit(1)
+        
+        self.init_ui()
+        self.load_waveform()
+    
+    def init_ui(self):
+        self.setWindowTitle("Wavls - Waveform Viewer")
+        self.setGeometry(100, 100, 800, 400)
+        self.setStyleSheet("background-color: black;")
+        
+        layout = QtWidgets.QVBoxLayout()
+        
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground("black")
+        self.plot_widget.showGrid(x=False, y=False)
+        self.plot_widget.getAxis("bottom").setPen(pg.mkPen("#00FFFF"))
+        self.plot_widget.getAxis("left").setPen(pg.mkPen("#00FFFF"))
+        self.plot_widget.getAxis("left").setStyle(tickLength=-5)
+        
+        self.waveform_plot = self.plot_widget.plot(pen=pg.mkPen("#FF00FF", width=1.5))
+        layout.addWidget(self.plot_widget)
+        
+        self.file_label = QtWidgets.QLabel("", self)
+        self.file_label.setStyleSheet("color: #00FFFF; font-size: 14px;")
+        layout.addWidget(self.file_label)
+        
+        self.setLayout(layout)
+        
+        self.installEventFilter(self)
+    
+    def load_waveform(self):
+        filename = os.path.join(self.directory, self.files[self.current_index])
+        try:
+            data, samplerate = sf.read(filename, always_2d=True)
+            time_axis = np.linspace(0, len(data) / samplerate, num=len(data))
+            self.waveform_plot.setData(time_axis, data[:, 0])
+            self.file_label.setText(f"Viewing: {self.files[self.current_index]} | Sample Rate: {samplerate} Hz")
+        except Exception as e:
+            self.file_label.setText(f"Error loading {filename}")
+    
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.KeyPress:
+            if event.key() in (QtCore.Qt.Key.Key_Right, QtCore.Qt.Key.Key_Down):
+                self.current_index = (self.current_index + 1) % len(self.files)
+                self.load_waveform()
+            elif event.key() in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_Up):
+                self.current_index = (self.current_index - 1) % len(self.files)
+                self.load_waveform()
+            elif event.key() == QtCore.Qt.Key.Key_Q:
+                QtWidgets.QApplication.quit()
+        return super().eventFilter(obj, event)
+    
+if __name__ == "__main__":
+    directory = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    app = QtWidgets.QApplication(sys.argv)
+    viewer = Wavls(directory)
+    viewer.show()
+    sys.exit(app.exec())
+
