@@ -1,78 +1,97 @@
 #!/bin/env python3
 
-import sys
-import struct
 import numpy as np
 import wave
-import argparse
-from scipy.signal import hilbert
+import sys
+from scipy.fft import ifft
 
-def extract_metadata(data, num_samples=14):
-    """Extract the last 14 samples as potential metadata (phase correction values)."""
-    metadata_data = data[-(num_samples * 2):]  # 14 samples * 2 bytes per sample
-    metadata = np.array(struct.unpack(f"{num_samples}h", metadata_data), dtype=np.int16)
-    return metadata
+def detect_extraction_method(gly_data):
+    """
+    Analyze the GLY file metadata and structure to determine the correct extraction method.
+    """
+    gly_int16 = np.frombuffer(gly_data, dtype=np.int16)
+    
+    # Extract first 200 bytes of metadata
+    metadata_values = gly_int16[:100]  # Extract first 100 int16 values
+    last_20_values = gly_int16[-20:]
+    
+    # Heuristic 1: If the last 20 values contain alternating zeros, it suggests harmonic synthesis
+    if np.all(last_20_values[1::2] == 0) and np.std(last_20_values[::2]) > 5000:
+        print("Detected harmonic synthesis due to structured zero pattern in metadata.")
+        return "harmonic_synthesis"
+    
+    # Heuristic 2: If the first 100 values contain large spikes and structured zeros, it's likely synthesis
+    zero_count = np.count_nonzero(metadata_values == 0)
+    if zero_count > 30 and np.max(metadata_values) > 10000:
+        print("Detected harmonic synthesis due to high zero-padding and large coefficient values.")
+        return "harmonic_synthesis"
+    
+    # Heuristic 3: If metadata values vary continuously without repeating zero-padding, assume PCM
+    if np.std(metadata_values) > 5000 and zero_count < 10:
+        print("Detected raw PCM waveform due to continuous value variance.")
+        return "pcm_standard"
+    
+    # Default to PCM extraction if uncertain
+    print("Unclear format, defaulting to PCM extraction.")
+    return "pcm_standard"
 
-def apply_phase_correction(waveform, phase_metadata):
-    """Applies phase correction based on metadata values."""
-    analytic_signal = hilbert(waveform)  # Compute the analytic signal
-    phase = np.angle(analytic_signal)  # Extract instantaneous phase
-
-    # Convert metadata to phase shift values in radians
-    phase_shift_degrees = (phase_metadata / 32768.0) * 360.0  # Normalized to degrees
-    phase_shift_radians = np.deg2rad(phase_shift_degrees.mean())  # Average shift in radians
-
-    # Apply phase correction
-    waveform_corrected = np.real(waveform * np.exp(-1j * phase_shift_radians))  # Phase shift
-
-    return waveform_corrected.astype(np.int16)
-
-def gly_to_wav(gly_filename, wav_filename, sample_rate=44100, resample=False):
-    """Converts a GLY file to a phase-corrected WAV format."""
-    try:
-        with open(gly_filename, "rb") as file:
-            data = file.read()
-
-        # Locate start of waveform data
-        header_size = 104  # Adjusted to skip known metadata
-        num_samples = 2034  # Expected sample count
-        raw_waveform_data = data[header_size:header_size + (num_samples * 2)]  # int16 is 2 bytes per sample
-
-        # Convert to int16 array
-        waveform = np.array(struct.unpack(f"{num_samples}h", raw_waveform_data), dtype=np.int16)
-
-        # Extract metadata (phase correction values)
-        phase_metadata = extract_metadata(data)
-
-        # Apply phase correction
-        waveform = apply_phase_correction(waveform, phase_metadata)
-
-        # Optional: Resample to 2048 samples for better synth compatibility
-        if resample:
-            waveform = np.interp(
-                np.linspace(0, num_samples - 1, 2048),  # New sample positions
-                np.arange(num_samples),  # Original positions
-                waveform  # Original data
-            ).astype(np.int16)
-
-        # Save as WAV file
-        with wave.open(wav_filename, "w") as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16-bit PCM
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(waveform.tobytes())
-
-        print(f"Successfully converted '{gly_filename}' to '{wav_filename}' with phase correction.")
-
-    except Exception as e:
-        print(f"Error processing '{gly_filename}': {e}")
+def convert_gly_to_wav(gly_file, wav_file, sample_rate=44100):
+    """
+    Convert an Absynth GLY file to a standard WAV file.
+    Detects the correct extraction method based on metadata and structure.
+    """
+    # Read binary data
+    with open(gly_file, "rb") as file:
+        gly_data = file.read()
+    
+    # Determine extraction method
+    extraction_method = detect_extraction_method(gly_data)
+    
+    # Convert to int16
+    waveform_int16 = np.frombuffer(gly_data, dtype=np.int16)
+    
+    # Find first non-zero sample to remove metadata padding
+    nonzero_indices = np.where(waveform_int16 != 0)[0]
+    if len(nonzero_indices) == 0:
+        raise ValueError("No valid waveform data found in the GLY file.")
+    first_nonzero_index = nonzero_indices[0]
+    
+    if extraction_method == "harmonic_synthesis":
+        # Extract harmonic synthesis parameters
+        harmonic_amplitudes = waveform_int16[-20:][::2]  # Take only the nonzero values
+        harmonics = np.arange(1, len(harmonic_amplitudes) + 1)
+        
+        # Generate waveform using additive synthesis
+        t = np.linspace(0, 1, 512, endpoint=False)
+        reconstructed_waveform = np.zeros_like(t)
+        for amp, harmonic in zip(harmonic_amplitudes, harmonics):
+            reconstructed_waveform += amp * np.sin(2 * np.pi * harmonic * t)
+        
+        # Normalize to int16 range
+        reconstructed_waveform = (reconstructed_waveform / np.max(np.abs(reconstructed_waveform))) * 32767
+        waveform_final = reconstructed_waveform.astype(np.int16)
+    else:
+        # Default PCM extraction method
+        print("Extracting raw PCM waveform...")
+        waveform_extracted = waveform_int16[first_nonzero_index:first_nonzero_index + 1026]
+        waveform_final = waveform_extracted[::2]  # Remove interleaving
+    
+    # Save as WAV file
+    with wave.open(wav_file, "w") as wav:
+        wav.setnchannels(1)  # Mono
+        wav.setsampwidth(2)  # 16-bit
+        wav.setframerate(sample_rate)
+        wav.writeframes(waveform_final.astype(np.int16).tobytes())
+    
+    print(f"Converted {gly_file} -> {wav_file}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert a GLY file to a phase-corrected WAV format.")
-    parser.add_argument("input_gly", help="Path to input GLY file")
-    parser.add_argument("output_wav", help="Path to output WAV file")
-    parser.add_argument("--resample", action="store_true", help="Resample to 2048 samples for compatibility")
-
-    args = parser.parse_args()
-    gly_to_wav(args.input_gly, args.output_wav, resample=args.resample)
+    if len(sys.argv) != 3:
+        print("Usage: python convert_gly.py input.gly output.wav")
+        sys.exit(1)
+    
+    gly_file = sys.argv[1]
+    wav_file = sys.argv[2]
+    
+    convert_gly_to_wav(gly_file, wav_file)
 
